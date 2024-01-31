@@ -1,0 +1,6 @@
+planet_size_type,planet_size_unit,lower_mass,upper_mass
+Sub-Earth(<0.1 Earth),Earth Masses,0,0.1
+Earth Sized,Earth Masses,0.1,3
+Mini-Neptune (3-10X Earth),Earth Masses,3,10
+Neptunian (10-50X Earth),Earth Masses,10,50
+Jovian (>50X Earth),Earth Masses,50,NA

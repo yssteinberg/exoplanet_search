@@ -1,0 +1,9 @@
+spectral_class,lower_temp,upper_temp
+O,30000,NA
+B,10000,30000
+A,7500,10000
+F,6000,7500
+G,5200,6000
+K,3700,5200
+M,2400,3700
+Other,0,2400
