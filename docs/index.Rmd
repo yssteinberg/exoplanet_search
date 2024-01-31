@@ -687,7 +687,7 @@ ggplot(chart_dt[disc_pubdate > '2017-12-31' & variable == 'avg_orbit_t6m'],
   facet_wrap(~target_facility, scales = 'free') +
   ylab('Average Orbit (measured in AU; 1 = Earth orbit)') + xlab('Discovery Date') +
   labs(fill = 'Planet Type') +
-  ggtitle('Average orbit size of planet detected by Planet Type and Facility on a 6 month average') + theme_bw()
+  ggtitle('Average orbit size of planet detected by Planet Type and Facility on a 6 month avg') + theme_bw()
 ```
 
 **Conclusion**
