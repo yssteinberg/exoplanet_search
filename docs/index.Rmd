@@ -1,5 +1,5 @@
 ---
-title: "Exploratory Data Analyis - Exoplanets"
+title: "Exploratory Data Analysis - Exoplanets"
 output: html_document
 date: "2024-01-23"
 ---
@@ -49,7 +49,7 @@ Link: <https://exoplanetarchive.ipac.caltech.edu/cgi-bin/TblView/nph-tblView?app
 # Load Planetary Systems Composite Table
 # Skip to line 316 as the lines prior only contain meta data.
 # Might need to adjust if loading newer versions
-raw_dt = fread('data/PSCompPars_2024.01.23_14.28.52.csv', skip = 316)
+raw_dt = fread('../data/PSCompPars_2024.01.23_14.28.52.csv', skip = 316)
 dt = copy(raw_dt)
 head(dt[, .(pl_name, hostname, gaia_id, hd_name)])
 ```
@@ -60,7 +60,7 @@ Link: <https://exoplanetarchive.ipac.caltech.edu/cgi-bin/TblView/nph-tblView?app
 
 ```{r}
 # Load Non-composite table
-non_composite_raw_dt = fread('data/PS_2024.01.23_19.44.20.csv', skip = 292)
+non_composite_raw_dt = fread('../data/PS_2024.01.23_19.44.20.csv', skip = 292)
 non_composite_raw_dt[, pl_pubdate := paste0(pl_pubdate, '-01')]
 non_composite_raw_dt[, pl_pubdate := as.Date(pl_pubdate, format = '%Y-%m-%d')]
 head(non_composite_raw_dt[, .(pl_name, hostname, gaia_id, hd_name, pl_pubdate)])
@@ -159,7 +159,7 @@ Super Dense Gas Giants:
 
 ```{r}
 # Density Map
-density_map = fread('mappings/planet_density_map.csv')
+density_map = fread('../mappings/planet_density_map.csv')
 max_density = max(dt[!is.na(pl_dens)]$pl_dens)
 density_map[planet_type == 'Super Dense', upper_density := max_density]
 setkey(density_map, lower_density, upper_density)
@@ -192,7 +192,7 @@ Link: <https://exoplanetarchive.ipac.caltech.edu/docs/API_PS_columns.html>
 
 ```{r}
 # Planet size map
-size_map = fread('mappings/planet_size_map.csv')
+size_map = fread('../mappings/planet_size_map.csv')
 max_mass = max(dens_dt[!is.na(pl_dens)]$pl_bmasse)
 size_map[planet_size_type == 'Jovian (>50X Earth)', upper_mass := max_mass]
 setkey(size_map, lower_mass, upper_mass)
@@ -239,7 +239,7 @@ Link: <https://en.wikipedia.org/wiki/Stellar_classification#Class_M>
 
 ```{r}
 # Stellar Classification Map
-st_map = fread('mappings/spectral_class_map.csv')
+st_map = fread('../mappings/spectral_class_map.csv')
 max_temp = max(size_dt[!is.na(st_teff)]$st_teff)
 st_map[spectral_class == 'O', upper_temp := max_temp]
 setkey(st_map, lower_temp, upper_temp)
@@ -338,7 +338,7 @@ Planets with small orbits seem to be over represented in our data. Can we confir
 
 ```{r}
 # Solar system orbital map
-solar_map = fread('mappings/solar_system_orbit_map.csv')
+solar_map = fread('../mappings/solar_system_orbit_map.csv')
 setnames(solar_map, c('planet', 'orbit'), c('planet_orbit', 'upper_orbit'))
 solar_map[, lower_orbit := shift(upper_orbit, 1)]
 solar_map[is.na(lower_orbit), lower_orbit := 0]
@@ -551,7 +551,7 @@ Link: <https://en.wikipedia.org/wiki/List_of_potentially_habitable_exoplanets>
 ```{r}
 # Comparison to PHL at Arecibo
 # We will be using their "Conservative Sample" of 29 planets
-phl_dt = fread('data/hwc_table_all.csv')
+phl_dt = fread('../data/hwc_table_all.csv')
 setnames(phl_dt, c('Mass<br>(M<sub>E</sub>)', 'Radius<br>(R<sub>E</sub>)'),
          c('mass', 'radius'))
 head(phl_dt[(between(mass, 0.1, 3) | between(radius, 0.5, 1.6)),
@@ -627,9 +627,11 @@ ggplot(herz_dt[st_teff < 10000 & st_lum_solar_eq >= 0.001], aes(x = -st_teff, y 
 ```
 
 
-![Wikipedia Herzsprung-Russell](images/HRDiagram.png)
+![Wikipedia Herzsprung-Russell](../images/HRDiagram.png)
 
-**Conclusion - Validation** We have shown that our cleaning methods resulted in an exoplanet list with a large amount of overlap to the lists created by professional Astronomers. In addition, our star distribution looks very similar to that of a Herzsprung-Russell diagram.
+**Conclusion - Validation**
+
+We have shown that our cleaning methods resulted in an exoplanet list with a large amount of overlap to the lists created by professional Astronomers. In addition, our star distribution looks very similar to that of a Herzsprung-Russell diagram.
 
 We can be confident that the data we are using has some scientific basis in reality.
 
@@ -641,7 +643,7 @@ We previously established that none of our discovered exoplanets meet the full l
 
 What we are going to do next is create a chart that allows us to track progress towards finding habitable exoplanets over time. We have no problem finding G-Type stars, Earth sized planets, etc. - any other feature making Earth habitable - except that the orbits we are finding them in are too small.
 
-As a last step of this analysis lets set up a chart to monitor if this should change down the road. We are going to track any discovery facility currently active (excluding Kepler/K2), that has a consistent rate of detection and break those out by showing their average planetary orbits over time. This will give us an idea if we should expect any detections in the near future.
+As a last step of this analysis lets set up a chart to monitor if this should change down the road. We are going to track any discovery facility currently active (excluding Kepler/K2), that has a consistent rate of detection and break those out by showing their average planetary orbits over time. This will give us an idea if we should expect any detection in the near future.
 
 ```{r}
 # Filtering for habitability & Aggregating table for charting
@@ -690,4 +692,4 @@ ggplot(chart_dt[disc_pubdate > '2017-12-31' & variable == 'avg_orbit_t6m'],
 
 **Conclusion**
 
-As we can see the average planet orbit for a Habitable Planet is well below the 1 AU (Earth orbit around the sun). If we don't see the average trending up, we don't really have a chance of finding an Earth analog. For this to happen, baring any major technological advancements, we need to fundamentally change how we search for planets. Our telescopes need to be focused on a given star system for at least 3 years total to make such detections (3X transits needed to confirm detection) vs the current 25 days using TESS.
+As we can see the average planet orbit for a Habitable Planet is well below the 1 AU (Earth orbit around the sun). If we don't see the average trending up, we don't really have a chance of finding an Earth analog. For this to happen, baring any major technological advancements, we need to fundamentally change how we search for planets. Our telescopes need to be focused on a given star system for at least 3 years total to make such a detection (3X transits needed to confirm detection) vs the current 25 days using TESS.
