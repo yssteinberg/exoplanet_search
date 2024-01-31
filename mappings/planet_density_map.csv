@@ -1,0 +1,5 @@
+planet_type,planet_density_unit,lower_density,upper_density
+Gas,g/cm^3,0,2
+Ice/Water,g/cm^3,2,3
+Rock,g/cm^3,3,8
+Super Dense,g/cm^3,8,

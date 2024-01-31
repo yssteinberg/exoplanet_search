@@ -1,0 +1,693 @@
+---
+title: "Exploratory Data Analyis - Exoplanets"
+output: html_document
+date: "2024-01-23"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Make sure to install the following packages first
+suppressWarnings(library(data.table))
+suppressWarnings(library(ggplot2))
+suppressWarnings(library(lubridate))
+```
+
+## Exoplanets - Do other earth like planets exist?
+
+\
+
+### Introduction
+
+Exoplanets are defined as planets orbiting other stars. Astronomers long hypothesized these might exist, but only recently developed the technology to detect them consistently. The first exoplanet was discovered in 1992, with an additional 5500+ planets having been found since (Jan 2024). Telescopes such as Kepler and TESS were commissioned with the hope of one day answering the question - Do other habitable planets, or Earth analogs, exist?
+
+**Project Goal**
+
+The goal of this project is to to give a status update on our search for Earth analogs. Have we found any habitable planets yet? Why/why not, and do they even exist? We will be using data from the NASA Exoplanet Archive, a database containing information on every exoplanet discovered to date.
+
+We will divide our analysis into the following sub-sections:\
+- **Data Versions**: Deciding what cut of data we will use\
+- **Data Cleaning**: Re-formating, mapping and handling potential data issues\
+- **Validation**: Ensuring the data resembles reality by comparing it to known facts\
+- **Analysis & Monitoring**: Can we answer our question? If not, is there a way to monitor progress towards our goal?
+
+For information on the NASA Exoplanet Archive: <https://exoplanetarchive.ipac.caltech.edu/docs/intro.html>
+
+**Other Notes**
+
+Formatting - I was taught to use `=` to declare variables, not the customary R way of using `<-`.
+
+\
+
+#### Data Versions
+
+We will be using the table `Planetary Systems Composite Parameters Planet Data` for our analysis. How to obtain yourself: Follow the link below \> click on `Download Table` \> select `CSV Format` + `Download All Columns` + `Download All Rows` \> click `Download Table`
+
+Link: <https://exoplanetarchive.ipac.caltech.edu/cgi-bin/TblView/nph-tblView?app=ExoTbls&config=PSCompPars>
+
+```{r}
+# Load Planetary Systems Composite Table
+# Skip to line 316 as the lines prior only contain meta data.
+# Might need to adjust if loading newer versions
+raw_dt = fread('data/PSCompPars_2024.01.23_14.28.52.csv', skip = 316)
+dt = copy(raw_dt)
+head(dt[, .(pl_name, hostname, gaia_id, hd_name)])
+```
+
+Note - Alternatively there is a bigger `Planet Systems Table` available as well. This "non-composite" table has multiple rows per exoplanet, one for each study a planet was cited in and for which measurements were taken. The composite table consolidates these data point into a single row per planet. NASA notes the composite table is not "necessarily self-consistent", but provides a bigger picture.
+
+Link: <https://exoplanetarchive.ipac.caltech.edu/cgi-bin/TblView/nph-tblView?app=ExoTbls&config=PS>
+
+```{r}
+# Load Non-composite table
+non_composite_raw_dt = fread('data/PS_2024.01.23_19.44.20.csv', skip = 292)
+non_composite_raw_dt[, pl_pubdate := paste0(pl_pubdate, '-01')]
+non_composite_raw_dt[, pl_pubdate := as.Date(pl_pubdate, format = '%Y-%m-%d')]
+head(non_composite_raw_dt[, .(pl_name, hostname, gaia_id, hd_name, pl_pubdate)])
+```
+
+Since the archive highlighted differences in the versions, lets spot check to ensure we are using the table best suited for us. Selecting several columns and compare the % of rows with NA values for each version should be a good start.
+
+Note - We will go into detail on what the specific columns mean later. For now, the one column to remember is `pl_name` (Planet Name).
+
+```{r}
+# For non-composite table - Keep rows with data points from latest study only
+# We could aggregate values column wise into one cell, but lets just see first
+nc_index = non_composite_raw_dt[, .I[which.max(pl_pubdate)], by = pl_name]
+nc_dt = non_composite_raw_dt[nc_index$V1]
+
+# Combine both tables and compare # of NAs to get estimate on completeness
+nc_dt = nc_dt[, .(pl_name, pl_dens, pl_rade, pl_orbper, pl_orbincl,
+                  st_spectype, st_teff, st_rad, st_mass, st_lum,
+                  discoverymethod, disc_year, disc_pubdate,
+                  disc_facility, sy_dist, table_name = 'Non-Composite')]
+c_dt = dt[, .(pl_name, pl_dens, pl_rade, pl_orbper, pl_orbincl, st_spectype,
+              st_teff, st_rad, st_mass, st_lum, discoverymethod, disc_year,
+              disc_pubdate, disc_facility, sy_dist, table_name = 'Composite')]
+comb_dt = rbind(nc_dt, c_dt)
+
+long_comb_dt = suppressWarnings(melt(comb_dt, id.vars = c('pl_name', 'table_name'),
+                                     variable.name = 'column_name'))
+
+# Calculate NA share per column
+planet_count = long_comb_dt[, .(total_cnt = uniqueN(pl_name)), by = table_name]
+long_agg_dt = long_comb_dt[!is.na(value) & !value == '']
+long_agg_dt = long_agg_dt[, .(cnt = uniqueN(pl_name)), by = .(table_name, column_name)]
+table_comp_dt = merge(long_agg_dt, planet_count, by = 'table_name')
+table_comp_dt[, share := cnt / total_cnt]
+
+ggplot(table_comp_dt, aes(fill = table_name, x = column_name, y = share)) +
+  geom_bar(stat = "identity", position = 'dodge', width = 0.7, col=I("white")) +
+  ylab("Share (%)") + xlab("Column") + labs(fill = "Table") +
+  scale_x_discrete(guide = guide_axis(angle = 45)) +
+  ggtitle('Share of non-NA values by column and table name') + theme_bw()
+```
+
+We immediately notice a very large discrepancy between the two tables. The composite table has a lot more data (ex. column `pl_dens`). Lets spot check the raw tables with planet `11 Com b` as example to see the difference.
+
+```{r}
+# Example `11 Com b`
+
+# Non Composite Table
+non_composite_raw_dt[pl_name == '11 Com b', .(pl_name, pl_dens, pl_rade, st_spectype, pl_pubdate)]
+```
+
+vs.
+
+```{r}
+# Composite Table
+dt[pl_name == '11 Com b', .(pl_name, pl_dens, pl_rade, st_spectype)]
+```
+
+The non-composite table has no values for the columns `pl_dens` (Planet Density) and `pl_rade` (Planet Radius), while the composite table does. The composite table must be filling in these value with some kind of calculation. Reading the documentation reveals that `Planet density` is in-fact calculated when not given.
+
+Link: <https://exoplanetarchive.ipac.caltech.edu/docs/pscp_calc.html>
+
+**Conclusion - Data Versions**
+
+There are two versions of the data. The non-composite table has a row for each planet x study combination, while the composite table condenses these data points into one row per planet + tries to fill in values if possible. The fill makes the data a lot more comprehensive and we will therefore be using the composite table going forward.
+
+\
+
+#### Cleaning
+
+There are 300+ columns in the table, but not all will be relevant to our analysis. To decide which to keep for our analysis, we need to develop some domain knowledge first.
+
+To determine if a planet is habitable we will be looking at:\
+- Planet Density\
+- Planet Size\
+- Star Type\
+- Planet Orbit/Habitable Zone\
+
+**Planet Density**
+
+There are three main types of planets: Rocky/terrestrial (Earth), Ice/ocean (Enceladus) and Gas planets (Jupiter). We can use known density ranges for planets in the solar system to roughly estimate what category an exoplanet belongs to. This is an imperfect way to classify planets, because 1) exoplanets don't always have solar system analogs we can compare them to 2) gas giants as they get larger compress their cores and density increases again. We will add in a fourth category, `Super Dense` planets to capture these and other types of exotic exoplanets. Starting at 8g/cm\^3 these exoplanets are essentially as dense as elemental iron.
+
+References:
+
+Densities for planets in solar system:
+
+<https://starchild.gsfc.nasa.gov/docs/StarChild/teachers/densities.html>
+
+Densities for icy objects:
+
+<https://en.wikipedia.org/wiki/Terrestrial_planet>
+
+Super Dense Gas Giants:
+
+<https://astronomy.stackexchange.com/questions/13382/planets-classification-by-density>
+
+```{r}
+# Density Map
+density_map = fread('mappings/planet_density_map.csv')
+max_density = max(dt[!is.na(pl_dens)]$pl_dens)
+density_map[planet_type == 'Super Dense', upper_density := max_density]
+setkey(density_map, lower_density, upper_density)
+density_map
+```
+
+```{r}
+# Join planet density map
+dens_dt = dt[!is.na(pl_dens)]
+dens_dt[, `:=` (lower_density = pl_dens, upper_density = pl_dens)]
+dens_dt = foverlaps(dens_dt, density_map, type = 'within', mult = 'first')
+dens_dt[, `:=` (i.lower_density = NULL, i.upper_density = NULL, planet_density_unit = NULL)]
+
+# Plot planet density distribution
+ggplot(dens_dt[pl_dens < 10], aes(pl_dens, fill = planet_type)) +
+  geom_histogram(position = 'identity', binwidth = 0.2, col=I("white")) +
+  ylab('Planet Count') + xlab('Density (g/cm^3)') + labs(fill = 'Planet Type') +
+  ggtitle('Planet Density distribution') + theme_bw()
+```
+
+For the sake of this analysis, we will assume that only rocky planets are habitable and exclude Ice/Ocean planets.
+
+**Planet Size**
+
+There are two ways of measuring planet size to determine habitability. Its estimated an exoplanet needs to be between 0.5 - 1.6 Earth radii, or between 0.1 - 3 Earth masses. NASA Exoplanet Database provides us with data points on mass (column `pl_bmasse`) and radius (column `pl_rade`), both measured in Earth equivalents. We are going to be using mass as measurement for planet size going forward.
+
+Link: <https://phl.upr.edu/hwc>
+
+Link: <https://exoplanetarchive.ipac.caltech.edu/docs/API_PS_columns.html>
+
+```{r}
+# Planet size map
+size_map = fread('mappings/planet_size_map.csv')
+max_mass = max(dens_dt[!is.na(pl_dens)]$pl_bmasse)
+size_map[planet_size_type == 'Jovian (>50X Earth)', upper_mass := max_mass]
+setkey(size_map, lower_mass, upper_mass)
+size_map
+```
+
+Note - Mars has about 15% the mass of Earth, so `Sub-Earth (<0.1 Earth)` refers to anything smaller. Mars barely has an atmosphere, so anything smaller will most likely lack one completely. Mini-Neptunes have very thick atmospheres, trapping too much heat for life to exist. Neptunian and Jovian refer to Neptune and Jupiter sized planets. `Earth Sized` planets will most likely be the only planets hospitable to life.
+
+```{r}
+# Join planet size map
+size_dt = dens_dt[!is.na(pl_bmasse)]
+size_dt[, `:=` (lower_mass = pl_bmasse, upper_mass = pl_bmasse)]
+size_dt = foverlaps(size_dt, size_map, type = 'within', mult = 'first')
+size_dt[, `:=` (i.lower_mass = NULL, i.upper_mass = NULL, planet_size_unit = NULL)]
+
+# Plot planet size distribution
+size_chart = size_dt[, .(pl_name, planet_type, planet_size_type)]
+size_chart[, planet_type := ifelse(planet_size_type == 'Earth Sized',
+                                   paste(planet_size_type, planet_type,
+                                         sep = ' - '),
+                                   planet_size_type)]
+size_chart = size_chart[, .(cnt = .N), by = planet_type][order(-cnt)]
+
+ggplot(size_chart, aes(x = reorder(planet_type, +cnt), cnt,
+                       fill = factor(
+                         ifelse(planet_type == 'Earth Sized - Rock',
+                                'Habitable', 'Not Habitable')))) +
+  geom_bar(stat = 'identity') + coord_flip() +
+  geom_text(aes(label = cnt), hjust = 1.3, color = 'black', size = 3) +
+  ylab('Count') + xlab('Planet Type') + labs(fill = '') +
+  ggtitle('Planets by Size and Type') + theme_bw()
+ 
+```
+
+Just over 900, or 17% of exoplanets discovered pass our planet density and size requirements to consider them habitable. More factor determine habitability, such as atmospheric composition, magnetic fields, etc. but these are out of the scope of this project.
+
+**Star Type**
+
+We classify stars based on their surface temperature, which correlates to size. The main classifications are, largest to smallest, O, B, A, F, G (our sun), K, M (red dwarves). These are called spectral types, or spectral classifications.
+
+Stars larger than the Sun (G-Type) radiate too intensely for life to exit. Smaller, K-type stars last longer and are more stable, making them even better candidates to host life. However, research is now showing they might emit too much X-ray radiation, potentially sterilizing planets orbiting them. M-type stars are the smallest on the list and emit the least light. A planet would have to orbit a lot closer to the star to be considered habitable. At those short distances planets tidally locks however. One side of the planet always faces the sun (similar to how the moon faces the earth), the other side always away. This might be too extreme an environment for life to exist on. We will therefore rule out K and M stars and focus on only G-Type.
+
+Link: <https://en.wikipedia.org/wiki/Stellar_classification#Class_M>
+
+```{r}
+# Stellar Classification Map
+st_map = fread('mappings/spectral_class_map.csv')
+max_temp = max(size_dt[!is.na(st_teff)]$st_teff)
+st_map[spectral_class == 'O', upper_temp := max_temp]
+setkey(st_map, lower_temp, upper_temp)
+st_map
+```
+
+The Nasa Expolanet Archive only provides incomplete spectral classification, with \~3500 rows missing data. They do provide data on a stars surface temperature `st_teff`, with only \~200 missing entries. We will join our own spectral classification map to this column and compare vs the provided classification.
+
+```{r}
+# Provided classification distribution
+size_dt[, provided_main_spectral_class := substr(st_spectype, 0, 1)]
+stellar_type = size_dt[, .(pl_name, provided_main_spectral_class)]
+stellar_type = stellar_type[, .N, by = provided_main_spectral_class]
+stellar_type[order(provided_main_spectral_class)]
+```
+
+```{r}
+# Join Spectral Classification map
+st_dt = size_dt[!is.na(st_teff)]
+st_dt[, `:=` (lower_temp = st_teff, upper_temp = st_teff)]
+st_dt = foverlaps(st_dt, st_map, type = 'within', mult = 'first')
+st_dt[, `:=` (i.lower_temp = NULL, i.upper_temp = NULL)]
+
+# Plot Spectral Classification distribution
+st_comp_dt = st_dt[, .(cnt = .N),
+                   by = .(provided_main_spectral_class, spectral_class)]
+ggplot(st_comp_dt[!provided_main_spectral_class == ''],
+       aes(fill = spectral_class, y = cnt, x = provided_main_spectral_class)) + 
+  geom_bar(position="stack", stat="identity") +
+  ylab('Star Count') + xlab('Provided Classification') +
+  labs(fill = 'Calculated Classification') +
+  ggtitle('Stars by Provided vs Calculated Classification') + theme_bw()
+
+```
+
+Provided and calculated star classifications mostly overlap. Where they are don't, they are usually get placed into the adjacent category. Let's spot check mismatches.
+
+```{r}
+# Examples of mismatches
+st_dt[pl_name %in% c('11 Com b', '14 Her b'),
+      .(pl_name, st_spectype, provided_main_spectral_class,
+        spectral_class, st_teff, pl_bmassj, pl_radj, pl_orbper, disc_year)]
+```
+
+Looking at literature we see that NASA agrees with our calculated classification for the stars above.
+
+`11 Com b` Link: <https://exoplanets.nasa.gov/exoplanet-catalog/6988/11-comae-berenices-b/>
+
+`14 Her b` Link: <https://exoplanets.nasa.gov/exoplanet-catalog/6991/14-herculis-b/>
+
+**Orbit/Habitable Zone**
+
+Earth is only habitable because it orbits the sun at a specific distance. Any closer and it would be too hot. Too far away and not enough sunlight would reach the planet to sustain life. To calculate the approximate habitable zone of a planet we use the following formula:
+
+`r_inner = sqrt(star_luminosity/1.1); r_outer = sqrt(star_luminosity/0.53); units in AU (Astronomical Units)`
+
+We can calculate `star_luminosity` using `st_lum` (stellar luminosity as a log10()). To convert the log, we just apply:
+
+`star_lum_per_solar_lum = 10\^st_lum; units = "starluminocity"/"solar luminosity"`
+
+Link: <https://www.planetarybiology.com/calculating_habitable_zone.html>
+
+Link: <https://exoplanetarchive.ipac.caltech.edu/docs/API_PS_columns.html>
+
+```{r}
+# Habital zone calculation
+st_dt[, st_lum_solar_eq := (10^st_lum)]
+st_dt[, `:=` (hz_inner = sqrt(st_lum_solar_eq/1.1),
+              hz_outer = sqrt(st_lum_solar_eq/0.53))]
+head(st_dt[, .(pl_name, pl_orbper, pl_orbsmax, spectral_class, st_spectype,
+               st_teff, st_lum, hz_inner, hz_outer, st_lum_solar_eq)], 6)
+```
+
+At first glance, some of these habitable zone (`hz_inner`, `hz_outer`) and stellar luminosity values (`st_lum_solar_eq`), look wrong. `11 Com b` has an hz_inner radius of 9.29 AU, or 9X the Earth - Sun distance! However, spot checks confirm that they are correct.
+
+Per Wikipedia, `11 Com B` orbits the star `11 Comae Berenices`, which is 110X as luminous as the sun. It might be a G type star, but its expanded to 16X the suns radius. This would explain why the inner and outer habitable zones are 9-13 AU out. Similar story with `11 UMi b`. Orbiting at 1.178 AU, 1.530 AU (see `pl_orbsmax`) away from the sun, these planets are getting cooked.
+
+`11 Com b` link: <https://en.wikipedia.org/wiki/11_Comae_Berenices>
+
+`11 UMi b` link: <https://en.wikipedia.org/wiki/11_Ursae_Minoris>
+
+```{r}
+# Filtering for Earth Sized planets that exist in our calculated habitable zone
+st_dt[pl_orbsmax > hz_inner & pl_orbsmax < hz_outer &
+        planet_size_type == 'Earth Sized',
+      .(pl_name, spectral_class, planet_size_type, planet_type,
+        pl_bmasse, pl_rade, pl_orbper, pl_orbsmax, hz_inner, hz_outer)]
+
+```
+
+None of the planets in our data fulfill all requirements to be considered habitable. For reasons previously determined, M and K-Type stars are most likely not suitable for life. Only G-type stars can host habitable planets, and we haven't found a single match. Why is that?
+
+Columns `pl_orbper` (days it takes for a planet to orbit a star) and `pl_orbsmax` (distance at which a planet orbits a star) gives us a hint. Most of these planets orbit their star closer and faster than Mercury orbits the sun (88 days, 0.4 AU).
+
+Planets with small orbits seem to be over represented in our data. Can we confirm?
+
+```{r}
+# Solar system orbital map
+solar_map = fread('mappings/solar_system_orbit_map.csv')
+setnames(solar_map, c('planet', 'orbit'), c('planet_orbit', 'upper_orbit'))
+solar_map[, lower_orbit := shift(upper_orbit, 1)]
+solar_map[is.na(lower_orbit), lower_orbit := 0]
+max_orbit = st_dt[!is.na(pl_orbsmax), max(pl_orbsmax)]
+solar_map[is.na(upper_orbit), upper_orbit := max_orbit]
+solar_map[!planet_orbit == 'Beyond', planet_orbit := paste0('Sub-', planet_orbit)]
+solar_map = solar_map[, .(planet_orbit, lower_orbit, upper_orbit)]
+solar_map[, planet_orbit_rank := rank(lower_orbit)]
+setkey(solar_map, lower_orbit, upper_orbit)
+solar_map
+```
+
+```{r}
+# Join Solar Orbit map
+so_dt = st_dt[!is.na(pl_orbsmax)]
+so_dt[, `:=` (lower_orbit = pl_orbsmax, upper_orbit = pl_orbsmax)]
+so_dt = foverlaps(so_dt, solar_map, type = 'within', mult = 'first')
+so_dt[, `:=` (i.lower_orbit = NULL, i.upper_orbit = NULL)]
+
+# Plot Planet Orbit distribution
+so_comp_dt = rbind(so_dt[spectral_class == 'G', .(cnt = .N),
+                         by = .(planet_orbit, planet_orbit_rank, spectral_class)],
+                   so_dt[, .(cnt = .N, spectral_class = 'All'),
+                         by = .(planet_orbit, planet_orbit_rank)])
+
+ggplot(so_comp_dt, aes(x = reorder(planet_orbit, +planet_orbit_rank), y = cnt)) + 
+  geom_bar(stat = "identity", position = 'dodge', width = 0.7, col=I('white')) +
+  facet_wrap(~spectral_class) +
+  ylab('Planet Count') + xlab('Column') +
+  scale_x_discrete(guide = guide_axis(angle = 45)) +
+  ggtitle('Planet Orbits by Spectral Class') + theme_bw()
+```
+
+We can confirm that the vast majority of planets we are finding orbit closer to their star than that of Mercury. This holds true for G-Type stars as well as all. These are not the ideal orbits to to find habitable planets in!
+
+To understand why, lets look at how we are detecting these exoplanets next
+
+**Exoplanet Detection Methods**
+
+```{r}
+# Detection by method
+so_dt[, .(cnt = .N, min_date = min(disc_year), max_date = max(disc_year), share = .N / dt[, .N]),
+   by = discoverymethod][order(-cnt)]
+```
+
+95%+ of exoplanets are discovered either via the "Transit" method, or "Radial Velocity".
+
+Transit method refers to discovering a planet as it passes in between the star and us. The transiting planet will briefly dim the amount of light reaching us from the star. Think solar eclipse and how the moon temporarily blocks out sunlight. For this detection method to work a planet has to orbit right between the star and our telescope. Any slight offset from that and we might not be able to detect. Planets closer to the star will also be detected more frequently as they go around the star more frequently.
+
+Link: <https://exoplanets.nasa.gov/faq/31/whats-a-transit/>
+
+Radial velocity refers to discovering a planet by observing its star wobble. A planet orbiting a star will cause the star to slightly move off center. Think of the sport hammer throwing at the Olympics and how the athlete rotates off center. The bigger the planet compared to the star, the larger the wobble. This wobble causes a doppler shift in the light reaching us from the star, which is what we detect
+
+Link: <https://exoplanets.nasa.gov/resources/2285/radial-velocity/>
+
+We will classify all methods outside transit and radial velocity as "Other" going forward.
+
+```{r}
+# Map discovery methods
+main_disc = c('Transit', 'Radial Velocity')
+so_dt[, discoverymethod_cleaned := ifelse(discoverymethod %in% main_disc,
+                                          discoverymethod, 'Other')]
+so_dt[, disc_pubdate := as.Date(paste0(disc_pubdate, '-01'), format = '%Y-%m-%d')]
+```
+
+Lets look at planet orbits by detection method next. As we can see below, the ransit method excels at finding planets at close orbits to the star. The scale on our chart is in log so about 10X planets in a sub-mercury orbit were found using transit compared to planets in a sub-venus orbit. Radial velocity's discoveries have been a lot more distributed across the different orbits.
+
+```{r}
+# Plot Planet Orbit distribution
+meth_comp_dt = so_dt[, .(cnt = .N), by = .(planet_orbit, planet_orbit_rank,
+                                           discoverymethod_cleaned)]
+ggplot(meth_comp_dt, aes(x = reorder(planet_orbit, +planet_orbit_rank), y = cnt)) + 
+  geom_bar(stat = "identity", position = 'dodge', width = 0.7, col=I('white')) +
+  facet_wrap(~discoverymethod_cleaned) +
+  ylab('Planet Count (log scale)') + xlab('Column') +
+  scale_y_log10() +
+  scale_x_discrete(guide = guide_axis(angle = 45)) +
+  ggtitle('Planet Orbits by Detection method') + theme_bw()
+
+```
+
+In general, radial velocity is better at finding very large planets vs transit, as they are more likely to cause a sun to wobble (see below). So while its better at finding planets in a more habitable orbit, its worse at finding planets at the right size! Each detection method therefore has its strength and weaknesses.
+
+One last thing to note about transit method. Its estimated that only 0.47% of planets orbiting their star at 1 AU (basically Earths orbit around the sun) can be detected via transit. A planets orbit needs to be perfectly aligned and cross the star right between it and our telescope for this method to work. In addition, we need a planet to transit the sun 3 times in order to classify it. The first detection establishes the presence of a potential candidate, the second establishes the time frame/period at which it orbits, and the third detection is to confirm that the orbital period is correct, and wasn't two different objects passing the sun. This means that if you wanted to find an Earth analog around star similar to the sun, you would need to point your telescope at the same star for 3 years. To find a mars like planet with a 600+ day orbit you would need almost 6 years.
+
+Link: <https://en.wikipedia.org/wiki/Methods_of_detecting_exoplanets>
+
+```{r}
+# Plot Earth Sized planet distribution
+es_dt = so_dt[, .(cnt = .N), by = .(planet_size_type, discoverymethod_cleaned)]
+es_comp_total_dt = es_dt[, .(total_cnt = sum(cnt)), by = discoverymethod_cleaned]
+es_comp_dt = merge(es_dt, es_comp_total_dt, by = 'discoverymethod_cleaned')
+es_comp_dt[, share := cnt / total_cnt]
+ggplot(es_comp_dt, aes(fill = planet_size_type, x = discoverymethod_cleaned, y = share)) + 
+  geom_bar(stat = 'identity', position = 'stack', width = 0.7, col=I('white')) +
+  xlab('Column') +
+  scale_x_discrete(guide = guide_axis(angle = 45)) +
+  ggtitle('Planet Size by Detection method') + theme_bw()
+```
+
+**Discovery Facility**
+
+We already mentioned the two big exoplanet finding missions, Kepler and TESS. Together they have found 60% of all exoplanets to date. We include "K2" in this as its essentially the Kepler telescope. In 2013 the pointing mechanism for the telescope broke, but engineers came up with a way to still make use of it. The types of observations they could make changed though.
+
+```{r}
+# Facilities ranked by exoplanets discovered
+facility_rank = so_dt[, .(cnt = .N, min_date = min(disc_year),
+                          max_date = max(disc_year), share = .N / dt[, .N]),
+                      by = disc_facility][order(-cnt)]
+facility_rank[, cumulative_share := cumsum(share)]
+head(facility_rank[, -'max_date'])
+
+# Keep top 5 facilities and map rest to "Other"
+so_dt[disc_facility == 'Transiting Exoplanet Survey Satellite (TESS)', disc_facility := 'TESS']
+top5_facilities = so_dt[!disc_facility == 'Multiple Observatories'] # Remove as its not one entity
+top5_facilities = head(top5_facilities[, .(cnt = .N), by = disc_facility][order(-cnt)], 5)$disc_facility
+so_dt[, disc_facility_cleaned := ifelse(disc_facility %in% top5_facilities, disc_facility, 'Other')]
+```
+
+Lets repeat the orbit analysis, but this time look at the distribution by facility. Note - We can't use a log scale on a stacked bar chart, so we will zoom in on the second chart
+
+```{r}
+# Plot Planet Orbit distribution by facility
+fac_comp_dt = so_dt[planet_orbit_rank < 7, .(cnt = .N),
+                    by = .(planet_orbit, planet_orbit_rank,
+                           discoverymethod_cleaned, disc_facility_cleaned)]
+ggplot(fac_comp_dt, aes(fill = discoverymethod_cleaned,
+                        x = reorder(planet_orbit, +planet_orbit_rank), y = cnt)) + 
+  geom_bar(position = 'stack', stat = 'identity', width = 0.7, col=I('white')) +
+  facet_wrap(~disc_facility_cleaned) +
+  ylab('Planet Count') + xlab('Column') +
+  labs(fill = 'Detection Method') +
+  scale_x_discrete(guide = guide_axis(angle = 45)) +
+  ggtitle('Planet Orbits by Facility') + theme_bw()
+
+```
+
+```{r}
+# Exclude Sub-Mercury orbits
+ggplot(fac_comp_dt[!planet_orbit == 'Sub-Mercury'], aes(fill = discoverymethod_cleaned,
+                        x = reorder(planet_orbit, +planet_orbit_rank), y = cnt)) + 
+  geom_bar(position = 'stack', stat = 'identity', width = 0.7, col=I('white')) +
+  facet_wrap(~disc_facility_cleaned) +
+  ylab('Planet Count') + xlab('Column') +
+  labs(fill = 'Detection Method') +
+  scale_x_discrete(guide = guide_axis(angle = 45)) +
+  ggtitle('Planet Orbits by Facility (excl. Sub-Mercury)') + theme_bw()
+```
+
+As we can see Kepler and Tess are excellent at finding a large quantity of planets. Most of these are in very close orbits to the sun - not ideal for habitability. They are finding some planets in habitable orbits (Sub-Earth, Sub-Mars), but all our other facilities are finding similar quantities, if not more. In a direct comparison, Kepler has been finding more planets closer to what we are looking for than TESS.
+
+At this point there are few issues with the two space telescopes (TESS, Kepler), the other earth based telescopes.
+
+Earth based telescopes have the issue that air movements in the atmosphere distort any observation. This is why most large earth based telescopes are on large mountains like in Hawaii or in the Andes. It is also why we launched telescopes like Tess and Kepler. There is no atmosphere in space reducing atmospheric interference. So in general, Earth based telescopes are better at looking at stars close by.
+
+TESS scans 85% of the night sky, but only spends 27 days total observing a section. This means that if you wanted to discover a planet using the transit method, our most prolific detection method, you will have a hard time finding anything with a larger orbit, because whats the likely hood of a planet in an a 365 day orbit transiting in those 27 days - let alone confirming your findings, because you need it to orbit 3 times. A TESS detection needs to be followed up with a more long term observation from an earth telescope.
+
+Kepler focused its telescope on on about 0.25% of the sky. It total observation time is a lot longer - making it great for planets with larger orbits. The issue is that it has such a narrow view that a larger amount of planets are at very far distances making follow up observations with earth based telescopes harder. See below
+
+```{r}
+# Star Distance distribution
+distance_dt = so_dt[, .(cnt = .N), by = .(sy_dist, disc_facility_cleaned)]
+ggplot(distance_dt[sy_dist < 5000], aes(x = disc_facility_cleaned, y = sy_dist, fill = disc_facility_cleaned)) +
+  geom_boxplot() +
+  ylab('Star distance (parsec)') + xlab('Discovery Facility') +
+  labs(fill = 'Discovery Facility') +
+  scale_x_discrete(guide = guide_axis(angle = 45)) +
+  ggtitle('Star Distance distribution by Facility') + theme_bw()
+
+```
+
+**Conclusion - Data Cleaning**
+
+We have taken considerable steps to map, clean and categories both planets and stars in our table. We have classified planets for habitability based on their density and mass, cleaned up the star type/stellar classification, calculated habitable zones for each star and relabeled detection methods and facilities.
+
+While doing so, we already answered important questions about our search for an Earth analogs. We have not found a planet that meets all our requirements to be habitable. The reason for this lies mostly in our detection and search methods. Our main methods, Transit and Radial Velocity, both have strengths and weaknesses. Paired with how long our facilities/telescopes are spending each section of the sky searching for planets, we have not structured our search in a way thats optimal for discovering Earth analogs.
+
+Before moving to the next step, lets select all the relevant columns we will need for our analysis:
+
+```{r}
+# Cleaned table
+so_dt[, sy_dist := sy_dist * 3.26] # Convert star distance unit parasec to light years
+clean_dt = so_dt[, .(pl_name, planet_type, planet_size_type, planet_orbit, pl_orbper, pl_orbsmax, pl_bmasse,
+                     st_age, pl_rade, st_lum_solar_eq, spectral_class, st_teff, hz_inner, hz_outer, sy_dist,
+                     disc_year, disc_pubdate, discoverymethod_cleaned, disc_facility_cleaned, disc_facility)]
+```
+
+\
+
+#### Validation
+
+At this point in our analysis we want to benchmark our cleaned table against known metrics. You generally want to make sure your data has some resemblance to reality, before building any full fledged analysis/dashboard. This is to 1) not produce unuseable output, 2) it gives you the chance to go back and iterate on your cleanup process should you notice things you missed, but can fix.
+
+We will be comparing our data to:\
+
+1)  Existing lists of potentially habitable exoplanets. How do our exoplanet categorizations stack up against what professional astronomers put together
+
+2)  The Herzsprung-Russell Diagram. This is a diagram used to show the distribution and classification of stars in our nearby milkyway. Can we reproduce this using our data, or do the type of stars with exoplanets look totally different
+
+**Habitable exoplanet lists**
+
+There are two lists we can compare our exoplanets too. 1) From the Planetary Hability Lab (PHL) at Arecibo in Puerto Rico (Arecibo was the telescope featured in James Bond - Golden Eye), 2) List of habitable planets on wikipedia.
+
+For now, we will compare to PHL at Arecibo, because I can download their list and there is a lot of overlap between the two.
+
+Link: <https://phl.upr.edu/hwc>
+
+Link: <https://en.wikipedia.org/wiki/List_of_potentially_habitable_exoplanets>
+
+```{r}
+# Comparison to PHL at Arecibo
+# We will be using their "Conservative Sample" of 29 planets
+phl_dt = fread('data/hwc_table_all.csv')
+setnames(phl_dt, c('Mass<br>(M<sub>E</sub>)', 'Radius<br>(R<sub>E</sub>)'),
+         c('mass', 'radius'))
+head(phl_dt[(between(mass, 0.1, 3) | between(radius, 0.5, 1.6)),
+            .(Name, Type, `Detection Method`, mass, radius)][order(Name)])
+
+```
+
+PHL provides a conservative list of 29, and an optimistic list of 40 planets. Above, we use the conservative list (mass between 0.1 and 3 earths, OR radius 0.5 - 1.6). As we can see, they do not filter on spectral class and include M, K type stars.
+
+If we compare their list to ours below, we see a lot of overlap. This is exactly what we want to see! The first five planets (GJ 1002 b to Kepler-1652 b) are all included in their list as well. So clearly we are doing something correctly.
+
+```{r}
+# Our list of habitable exoplanets
+# We include Mini-Neptunes and dont filter on spectral_class
+head(clean_dt[planet_type == 'Rock' & between(pl_orbsmax, hz_inner, hz_outer)
+              & planet_size_type %in% c('Earth Sized', 'Mini-Neptune (3-10X Earth)'),
+              .(pl_name, planet_size_type, pl_orbsmax, pl_bmasse, pl_rade)])
+```
+
+Lets look at differences
+
+```{r}
+# Difference in exoplanet lists
+phl_exoplanets = phl_dt[(between(mass, 0.1, 3) | between(radius, 0.5, 1.6))]
+phl_exoplanets = phl_exoplanets[, .(pl_name = Name, table = 'PHL Arecibo')]
+
+our_exoplanets = clean_dt[planet_type == 'Rock' & between(pl_orbsmax, hz_inner, hz_outer)
+                          & planet_size_type %in% c('Earth Sized', 'Mini-Neptune (3-10X Earth)')]
+our_exoplanets = our_exoplanets[, .(pl_name, table = 'Our list')]
+
+exo_comp_dt = rbind(phl_exoplanets, our_exoplanets)
+exo_comp_dt = exo_comp_dt[, .(cnt = .N, table = max(table)), by = pl_name]
+exo_comp_dt[cnt == 2, table := 'Both']
+
+exo_comp_dt[, .(cnt = .N), by = table]
+```
+
+12/13 of the planets we classified as exoplanets are in their list. I think that speaks to our cleaning! BTW - our name mapping is identical, meaning they are using the same underlying data. Lets check next why they classified an additional 17 planets as habitable. What did we miss/not consider?
+
+```{r}
+missing_exo_dt = clean_dt[pl_name %in% exo_comp_dt[table == 'PHL Arecibo', unique(pl_name)]]
+missing_exo_dt[, .(pl_name, planet_orbit, pl_orbsmax, hz_inner, hz_outer)]
+
+```
+
+Looks like 15/17 planet names match those in our table.
+
+We see one Super Dense planet `K2-3 d`, otherwise all are Earth sized and rocky. Checking `K2-3 d` on Wikipedia reveals, that our density measurement might be out of date. It looks like the density was recently reduced (see link below).
+
+In terms of the other planets, it seems their orbits are all just 10-15% or so out of our calculated habitable zone. We could consider expanding our zone calculations to include these. But again, i think we did a good job getting close.
+
+Link: <https://en.wikipedia.org/wiki/K2-3d>
+
+**Herzsprung-Russell Diagram**
+
+Again, its a diagram used to show the distribution and classification of stars. Ours looks very similar to the center of the one on Wikipedia. We are missing some white dwarves and super giants, but this tells me that 1) our star data is reasonable 2) we are finding exoplanets distributed across all the mid-sized main star types.
+
+Link: <https://en.wikipedia.org/wiki/Hertzsprung%E2%80%93Russell_diagram>
+
+```{r}
+# Herzsprung Russell of stars with exoplanets
+herz_dt = clean_dt[, .(st_lum_solar_eq, st_teff, pl_name, spectral_class)]
+herz_colors = c('lightblue', '#ccffff', 'yellow', 'orange', 'red', 'darkblue')
+ggplot(herz_dt[st_teff < 10000 & st_lum_solar_eq >= 0.001], aes(x = -st_teff, y = st_lum_solar_eq,
+                                     color = spectral_class)) +
+  scale_color_manual("Spectral Class", values = herz_colors) +
+  scale_y_log10(labels = scales::comma) +
+  geom_point() +
+  ylab('Luminosity (Sun = 1) in log10') + xlab('Temp in K (reversed)') +
+  scale_x_discrete(guide = guide_axis(angle = 45)) +
+  ggtitle('Herzsprung Russell - Stars with exoplanet') + theme_bw()
+
+```
+
+
+![Wikipedia Herzsprung-Russell](images/HRDiagram.png)
+
+**Conclusion - Validation** We have shown that our cleaning methods resulted in an exoplanet list with a large amount of overlap to the lists created by professional Astronomers. In addition, our star distribution looks very similar to that of a Herzsprung-Russell diagram.
+
+We can be confident that the data we are using has some scientific basis in reality.
+
+\
+
+#### Analysis & Monitoring
+
+We previously established that none of our discovered exoplanets meet the full list of requirements to be considered habitable, or Earth analogs. Our current discovery methods simply aren't being used in a way to optimize Earth analogs.
+
+What we are going to do next is create a chart that allows us to track progress towards finding habitable exoplanets over time. We have no problem finding G-Type stars, Earth sized planets, etc. - any other feature making Earth habitable - except that the orbits we are finding them in are too small.
+
+As a last step of this analysis lets set up a chart to monitor if this should change down the road. We are going to track any discovery facility currently active (excluding Kepler/K2), that has a consistent rate of detection and break those out by showing their average planetary orbits over time. This will give us an idea if we should expect any detections in the near future.
+
+```{r}
+# Filtering for habitability & Aggregating table for charting
+db_dt = clean_dt[!disc_facility %in% c('K2', 'Kepler') &
+                   spectral_class == 'G' &
+                   !planet_size_type == 'Sub-Earth(<0.1 Earth)']
+db_dt[, planet_habitability :=
+        ifelse(planet_size_type %in% c('Earth Sized', 'Mini-Neptune (3-10X Earth)'),
+               'Planet Habitable (0.1 - 10X Earth)', 'Planet Not Habitable (>10X Earth)')]
+max_date = db_dt[!is.na(disc_pubdate), max(disc_pubdate)]
+cutoff_date = max_date %m-% months(12)
+breakout_facilities = db_dt[disc_pubdate >= cutoff_date,
+                            .(month_cnt = uniqueN(disc_pubdate)), by = disc_facility]
+breakout_fac_list = breakout_facilities[!disc_facility == 'Multiple Observatories']
+breakout_fac_list = breakout_fac_list[month_cnt >= 8]$disc_facility
+db_dt[, target_facility := ifelse(disc_facility %in% breakout_fac_list,
+                                  disc_facility, 'All Other')]
+agg_db_dt = db_dt[, .(cnt = .N, avg_orbit = mean(pl_orbsmax, na.rm = T)),
+                  by = .(target_facility, disc_pubdate, planet_habitability)]
+
+# Filling in publication date gaps
+disc_pubdate = agg_db_dt[, unique(disc_pubdate)]
+target_facility = agg_db_dt[, unique(target_facility)]
+planet_habitability = agg_db_dt[, unique(planet_habitability)]
+all_comb = CJ(disc_pubdate, target_facility, planet_habitability)
+output_dt = merge(all_comb, agg_db_dt,
+                  by = c('disc_pubdate', 'target_facility', 'planet_habitability'), all = T)
+output_dt[is.na(avg_orbit), avg_orbit := 0]
+
+setorder(output_dt, target_facility, planet_habitability, disc_pubdate)
+output_dt[, avg_orbit_t6m := frollmean(avg_orbit, 6), by = .(target_facility, planet_habitability)]
+chart_dt = suppressWarnings(melt(output_dt, id.vars = c('target_facility',
+                                                        'planet_habitability', 'disc_pubdate')))
+chart_dt[is.na(value), value := 0]
+chart_dt[, target_facility := paste0('Facility: ', target_facility)]
+
+# Chart
+ggplot(chart_dt[disc_pubdate > '2017-12-31' & variable == 'avg_orbit_t6m'],
+       aes(disc_pubdate, value, color = planet_habitability, group = planet_habitability)) +
+  geom_line() +
+  facet_wrap(~target_facility, scales = 'free') +
+  ylab('Average Orbit (measured in AU; 1 = Earth orbit)') + xlab('Discovery Date') +
+  labs(fill = 'Planet Type') +
+  ggtitle('Average orbit size of planet detected by Planet Type and Facility on a 6 month average') + theme_bw()
+```
+
+**Conclusion**
+
+As we can see the average planet orbit for a Habitable Planet is well below the 1 AU (Earth orbit around the sun). If we don't see the average trending up, we don't really have a chance of finding an Earth analog. For this to happen, baring any major technological advancements, we need to fundamentally change how we search for planets. Our telescopes need to be focused on a given star system for at least 3 years total to make such detections (3X transits needed to confirm detection) vs the current 25 days using TESS.
